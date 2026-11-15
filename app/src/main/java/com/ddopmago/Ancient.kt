@@ -55,69 +55,53 @@ object AncientData {
 
     private fun split(s: String): List<String> = s.codePoints().toArray().map { String(Character.toChars(it)) }
     fun find(w: String): Anc? = list.firstOrNull { it.w == w }
+    fun byMeaning(q: String): List<Anc> {
+        val k = q.trim().lowercase()
+        if (k.isEmpty()) return emptyList()
+        val anc = k.codePoints().toArray().filter { Repo.isAncientCp(it) }.map { String(Character.toChars(it)) }
+        return list.filter { a -> (anc.isNotEmpty() && a.w in anc) || (anc.isEmpty() && a.mean.contains(k)) }
+    }
+    fun byPron(q: String): List<Anc> {
+        val k = q.trim().lowercase()
+        if (k.isEmpty()) return emptyList()
+        return list.filter { a -> a.pron.any { p -> p[2].lowercase().contains(k) || p[1].contains(k) } }
+    }
 }
 
+/** 部首检索（古彝文）：67 个部首 → 笔画 → 字 */
 @Composable
-fun AncientPane(q: String, st: Store) {
+fun AncientRadicalPane(st: Store) {
     val ctx = LocalContext.current
     remember { AncientData.ensure(ctx); true }
-    var sub by rememberSaveable { mutableIntStateOf(0) }
     var selRad by rememberSaveable { mutableIntStateOf(-1) }
     var detail by remember { mutableStateOf<Anc?>(null) }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilterChip(selected = sub == 0, onClick = { sub = 0 }, label = { Text("释义 / 读音检索") })
-            FilterChip(selected = sub == 1, onClick = { sub = 1; selRad = -1 }, label = { Text("部首检索") })
-            Text("共 ${AncientData.list.size} 字", fontSize = 12.sp, color = Color.Gray)
-        }
-        Box(Modifier.weight(1f)) {
-            if (sub == 0) {
-                val key = q.trim().lowercase()
-                val res = remember(q) {
-                    if (key.isEmpty()) emptyList()
-                    else {
-                        val anc = key.codePoints().toArray().filter { Repo.isAncientCp(it) }.map { String(Character.toChars(it)) }
-                        AncientData.list.filter { a -> (anc.isNotEmpty() && a.w in anc) || (anc.isEmpty() && (a.mean.contains(key) || a.pron.any { p -> p[2].lowercase().contains(key) })) }.take(120)
-                    }
-                }
-                Column {
-                    Text(
-                        if (key.isEmpty()) "输入汉语释义（如：火、水、天）或读音字母，查古彝字；也可以粘贴古彝字" else "找到 ${res.size} 个（最多显示 120）",
-                        fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
-                    LazyColumn(Modifier.padding(horizontal = 8.dp)) { items(res) { a -> AncRow(a) { detail = a } } }
-                }
-            } else {
-                val r = AncientData.rads.getOrNull(selRad)
-                if (r == null) {
-                    Column {
-                        Text("按部首查古彝字：共 ${AncientData.rads.size} 个部首，点选部首，再按笔画找字", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                        LazyVerticalGrid(GridCells.Fixed(5), Modifier.padding(horizontal = 8.dp)) {
-                            items(AncientData.rads.indices.toList()) { i ->
-                                val x = AncientData.rads[i]
-                                Card(Modifier.padding(4.dp).clickable { selRad = i }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                        AncientText(x.r, 30.sp)
-                                        Text("${x.groups.sumOf { it.second.size }} 字", fontSize = 10.sp, color = Color.Gray)
-                                    }
-                                }
-                            }
+    val r = AncientData.rads.getOrNull(selRad)
+    if (r == null) {
+        Column {
+            Text("按部首查古彝字：共 ${AncientData.rads.size} 个部首，点选部首，再按笔画找字", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            LazyVerticalGrid(GridCells.Fixed(5), Modifier.padding(horizontal = 8.dp)) {
+                items(AncientData.rads.indices.toList()) { i ->
+                    val x = AncientData.rads[i]
+                    Card(Modifier.padding(4.dp).clickable { selRad = i }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            AncientText(x.r, 30.sp)
+                            Text("${x.groups.sumOf { it.second.size }} 字", fontSize = 10.sp, color = Color.Gray)
                         }
                     }
-                } else {
-                    Column {
-                        BackBar("部首 · ${r.groups.sumOf { it.second.size }} 字", { selRad = -1 }) { AncientText(r.r, 24.sp) }
-                        LazyColumn(Modifier.padding(horizontal = 8.dp)) {
-                            r.groups.forEach { (n, ws) ->
-                                item {
-                                    Text("${n} 画（${ws.size}）", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Red, modifier = Modifier.padding(8.dp))
-                                    FlowRow {
-                                        ws.forEach { w ->
-                                            Box(Modifier.padding(3.dp).background(Color.White, RoundedCornerShape(8.dp)).clickable { AncientData.find(w)?.let { detail = it } }.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                                                AncientText(w, 28.sp)
-                                            }
-                                        }
-                                    }
+                }
+            }
+        }
+    } else {
+        Column {
+            BackBar("部首 · ${r.groups.sumOf { it.second.size }} 字", { selRad = -1 }) { AncientText(r.r, 24.sp) }
+            LazyColumn(Modifier.padding(horizontal = 8.dp)) {
+                r.groups.forEach { (n, ws) ->
+                    item {
+                        Text("${n} 画（${ws.size}）", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Red, modifier = Modifier.padding(8.dp))
+                        FlowRow {
+                            ws.forEach { w ->
+                                Box(Modifier.padding(3.dp).background(Color.White, RoundedCornerShape(8.dp)).clickable { AncientData.find(w)?.let { detail = it } }.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                    AncientText(w, 28.sp)
                                 }
                             }
                         }
@@ -130,7 +114,7 @@ fun AncientPane(q: String, st: Store) {
 }
 
 @Composable
-private fun AncRow(a: Anc, onClick: () -> Unit) {
+fun AncRow(a: Anc, onClick: () -> Unit) {
     AppCard(Modifier.clickable(onClick = onClick)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(64.dp), contentAlignment = Alignment.Center) { AncientText(a.w, 38.sp) }
