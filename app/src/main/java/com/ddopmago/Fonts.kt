@@ -54,16 +54,28 @@ object Fonts {
     fun ancientBytes(): ByteArray = app.assets.open("fonts/ancient_lsty.ttf").readBytes()
 }
 
+object ClipHistory {
+    val items = androidx.compose.runtime.mutableStateListOf<String>()
+    fun add(s: String) {
+        if (s.isBlank()) return
+        items.remove(s); items.add(0, s)
+        while (items.size > 30) items.removeAt(items.size - 1)
+    }
+}
+
 object Clip {
     fun copy(ctx: Context, text: String) {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("ddopmago", text))
+        ClipHistory.add(text)
         Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show()
     }
 
     fun paste(ctx: Context): String {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val c = cm.primaryClip
-        return if (c != null && c.itemCount > 0) c.getItemAt(0).coerceToText(ctx).toString() else ""
+        val s = if (c != null && c.itemCount > 0) c.getItemAt(0).coerceToText(ctx).toString() else ""
+        ClipHistory.add(s)
+        return s
     }
 }
