@@ -194,6 +194,51 @@ object Repo {
             .filter { it.second >= 0.3 }.sortedByDescending { it.second }.take(12).map { all[it.first] }
     }
 
+    private var hanPyMap: HashMap<Char, String>? = null
+    fun hanPy(c: Char): String? {
+        val m = hanPyMap ?: HashMap<Char, String>().also { mm ->
+            for ((syl, chars) in pyMap.entries.sortedBy { it.key }) chars.forEach { ch -> if (ch !in mm) mm[ch] = syl }
+            hanPyMap = mm
+        }
+        return m[c]
+    }
+    fun zhPinyin(s: String): List<String> = s.filter { isHan(it) }.map { hanPy(it) ?: "" }
+
+    private val yiPy by lazy { all.map { pinyin(it.yi).replace(" ", "") } }
+    private val yiInit by lazy { all.map { s -> s.yi.filter { isYi(it) }.map { c -> (rom(c) ?: "?").take(1) }.joinToString("") } }
+    private val zhPy by lazy { all.map { zhPinyin(it.zh).joinToString("") } }
+    private val zhInit by lazy { all.map { s -> zhPinyin(s.zh).map { it.take(1) }.joinToString("") } }
+
+    /** 句子翻译：输入彝文→中文，输入中文→彝文，输入拼音按相似度排序；相似度极低时按首字母拼音法；没有完全相似时按含有相同字的多少排序 */
+    fun searchAny(raw: String): List<Sent> {
+        val q = raw.trim()
+        if (q.isEmpty()) return emptyList()
+        val yiSide = q.any { isYi(it) }
+        if (yiSide || q.any { isHan(it) }) {
+            val main = search(q, yiSide)
+            val qs = q.filter { if (yiSide) isYi(it) else isHan(it) }.toSet()
+            val pool = if (yiSide) cleanYi else cleanZh
+            val extra = all.indices.map { i -> i to qs.count { it in pool[i] } }
+                .filter { it.second > 0 && all[it.first] !in main }
+                .sortedWith(compareByDescending<Pair<Int, Int>> { it.second }.thenBy { pool[it.first].length })
+                .take(30).map { all[it.first] }
+            return (main + extra).distinct().take(40)
+        }
+        val letters = q.lowercase().filter { it in 'a'..'z' }
+        if (letters.isEmpty()) return emptyList()
+        val raws = all.indices.map { i -> maxOf(sim(letters, yiPy[i]), sim(letters, zhPy[i])) }
+        val has = all.indices.any { yiPy[it].contains(letters) || zhPy[it].contains(letters) }
+        if (has || (raws.maxOrNull() ?: 0.0) >= 0.2) {
+            return all.indices.map { i -> i to (raws[i] + (if (yiPy[i].contains(letters) || zhPy[i].contains(letters)) 0.5 else 0.0)) }
+                .filter { it.second >= 0.2 }.sortedByDescending { it.second }.take(40).map { all[it.first] }
+        }
+        fun rank(init: String) = if (init == letters) 3 else if (init.startsWith(letters)) 2 else if (init.contains(letters)) 1 else 0
+        val ini = all.indices.map { i -> i to maxOf(rank(yiInit[i]), rank(zhInit[i])) }
+            .filter { it.second > 0 }.sortedWith(compareByDescending<Pair<Int, Int>> { it.second }.thenBy { all[it.first].yi.length }).take(40).map { all[it.first] }
+        if (ini.isNotEmpty()) return ini
+        return all.indices.map { it to raws[it] }.sortedByDescending { it.second }.take(20).filter { it.second > 0 }.map { all[it.first] }
+    }
+
     fun sections(): List<String> = sents.map { it.sec }.distinct()
 
     /** 题型: 0彝→中选择 1中→彝选择 2判断 3翻译(彝→中) 4翻译(中→彝) 5填空 6拼音 */
