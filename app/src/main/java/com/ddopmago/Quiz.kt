@@ -105,7 +105,7 @@ fun QuizScreen(st: Store) {
     fun answered(cur: Q, g: Double) {
         got = g; done = true; total++; score += g
         st.addRecord("练习", Repo.group(cur.type) + (if (cur.tag.isNotEmpty() && cur.tag != "paper") "·" + Repo.bookName(cur.tag) else ""), if (g >= 1.0) "正确" else if (g > 0) "部分正确" else "错误")
-        if (g < 1.0) st.addWrong(cur)
+        if (g < 1.0) st.addWrong(cur) else st.addPoints(Repo.ptsOf(cur), "做对题")
     }
     LaunchedEffect(mode, book) { next() }
 
@@ -187,12 +187,14 @@ class ExamState {
     var got by mutableStateOf<List<Double>>(emptyList())
     var score by mutableIntStateOf(0)
     val full: Int get() = qs.sumOf { Repo.ptsOf(it) }
+    var hubTab by mutableIntStateOf(0) // 做题板块：0练习 1错题本 2分享 3笔记
+    var sub by mutableIntStateOf(0)    // 练习：0随堂练习 1模拟考试
 
     fun start() { fixed = null; begin("模拟考试", Repo.makeExam()) }
     fun startWith(t: String, list: List<Q>) { fixed = list; begin(t, list) }
     fun restart() { val f = fixed; if (f == null) start() else startWith(title, f) }
     private fun begin(t: String, list: List<Q>) {
-        title = t; qs = list; ans.clear(); qs.forEach { ans.add("") }; idx = 0; stage = 1
+        title = t; qs = list; ans.clear(); qs.forEach { ans.add("") }; idx = 0; stage = 1; hubTab = 0; sub = 1
     }
 
     fun submit(st: Store) {
@@ -201,6 +203,8 @@ class ExamState {
         if (fixed == null) st.addScore(score)
         st.addRecord(if (fixed == null) "模拟考试" else "试卷作答", title, "得分 $score / $full")
         qs.indices.filter { got[it] < 1.0 }.forEach { st.addWrong(qs[it]) }
+        var left = qs.indices.filter { got[it] >= 1.0 }.sumOf { Repo.ptsOf(qs[it]) }
+        while (left > 0) { val c = minOf(10, left); st.addPoints(c, "做对题"); left -= c }
         stage = 2
     }
 }
@@ -343,20 +347,33 @@ fun ExamResult(st: Store, ex: ExamState) {
 
 @Composable
 fun PracticeHub(st: Store, exam: ExamState) {
-    var t by rememberSaveable { mutableIntStateOf(0) }
-    val tabs = listOf("练习", "模拟考试", "错题本", "共享", "打印")
+    val tabs = listOf("练习", "错题本", "分享", "笔记")
     Column(Modifier.fillMaxSize()) {
-        ScrollableTabRow(selectedTabIndex = t, containerColor = Color.White, edgePadding = 4.dp) {
-            tabs.forEachIndexed { i, n -> Tab(selected = t == i, onClick = { t = i }, text = { Text(n) }) }
+        ScrollableTabRow(selectedTabIndex = exam.hubTab, containerColor = Color.White, edgePadding = 4.dp) {
+            tabs.forEachIndexed { i, n -> Tab(selected = exam.hubTab == i, onClick = { exam.hubTab = i }, text = { Text(n) }) }
         }
         Box(Modifier.weight(1f)) {
-            val start: (String, List<Q>) -> Unit = { title, qs -> if (qs.isNotEmpty()) { exam.startWith(title, qs); t = 1 } }
-            when (t) {
-                0 -> QuizScreen(st)
-                1 -> ExamScreen(st, exam)
-                2 -> WrongScreen(st, start)
-                3 -> SharedScreen(st, exam, start)
-                else -> PrintScreen(st, exam)
+            val start: (String, List<Q>) -> Unit = { title, qs -> if (qs.isNotEmpty()) exam.startWith(title, qs) }
+            when (exam.hubTab) {
+                0 -> Column(Modifier.fillMaxSize()) {
+                    Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = exam.sub == 0, onClick = { exam.sub = 0 }, label = { Text("随堂练习") })
+                        FilterChip(selected = exam.sub == 1, onClick = { exam.sub = 1 }, label = { Text("模拟考试") })
+                    }
+                    Box(Modifier.weight(1f)) { if (exam.sub == 0) QuizScreen(st) else ExamScreen(st, exam) }
+                }
+                1 -> WrongScreen(st, start)
+                2 -> {
+                    var sub by rememberSaveable { mutableIntStateOf(0) }
+                    Column(Modifier.fillMaxSize()) {
+                        Row(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(selected = sub == 0, onClick = { sub = 0 }, label = { Text("共享") })
+                            FilterChip(selected = sub == 1, onClick = { sub = 1 }, label = { Text("打印") })
+                        }
+                        Box(Modifier.weight(1f)) { if (sub == 0) SharedScreen(st, exam, start) else PrintScreen(st, exam) }
+                    }
+                }
+                else -> NotesScreen(st)
             }
         }
     }
