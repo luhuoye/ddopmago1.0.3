@@ -19,6 +19,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    androidResources { noCompress += listOf("ogg") }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 }
 dependencies {
