@@ -7,6 +7,9 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -82,7 +85,7 @@ object Lib {
 // ---------------- 学习：试卷 + 资料 + 书籍 ----------------
 
 @Composable
-fun StudyScreen(st: Store) {
+fun StudyScreen(st: Store, onStart: (String, List<Q>) -> Unit) {
     var t by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = t, containerColor = Color.White) {
@@ -90,7 +93,7 @@ fun StudyScreen(st: Store) {
             Tab(selected = t == 1, onClick = { t = 1 }, text = { Text("资料") })
             Tab(selected = t == 2, onClick = { t = 2 }, text = { Text("书籍") })
         }
-        Box(Modifier.weight(1f)) { when (t) { 0 -> PapersScreen(st); 1 -> DocsScreen(st); else -> BooksScreen(st) } }
+        Box(Modifier.weight(1f)) { when (t) { 0 -> PapersScreen(st); 1 -> DocsScreen(st); else -> BooksScreen(st, onStart) } }
     }
 }
 
@@ -131,10 +134,12 @@ fun LineActions(line: String, src: String, st: Store, onDismiss: () -> Unit) {
 
 /** 长文阅读：彝文逐字标拼音(可关闭)；长按一行可复制/收藏词句 */
 @Composable
-fun ReaderText(text: String, py: Boolean, st: Store? = null, src: String = "") {
+fun ReaderText(text: String, py: Boolean, st: Store? = null, src: String = "", progKey: String? = null) {
     var sel by remember { mutableStateOf<String?>(null) }
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        items(text.split("\n")) { l ->
+    val lines = remember(text) { text.split("\n") }
+    val ls = rememberLazyListState()
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), state = ls) {
+        items(lines) { l ->
             val m = if (st != null) Modifier.combinedClickable(onClick = {}, onLongClick = { sel = l }) else Modifier
             when {
                 l.isBlank() -> Spacer(Modifier.height(6.dp))
@@ -143,6 +148,27 @@ fun ReaderText(text: String, py: Boolean, st: Store? = null, src: String = "") {
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+    if (progKey != null && st != null) {
+        // 学习进度：本次读到的位置 %；读完一遍 = 完整学习一次
+        val pct by remember(lines.size) {
+            derivedStateOf {
+                val last = ls.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                ((last + 1) * 100 / lines.size.coerceAtLeast(1)).coerceAtMost(100)
+            }
+        }
+        var done by remember(progKey) { mutableStateOf(false) }
+        LaunchedEffect(pct) {
+            if (pct >= 100) { if (!done) { done = true; st.completeProg(progKey) } }
+            else { if (pct < 90) done = false; if (pct > 0) st.setPct(progKey, pct) }
+        }
+        // 看资料得积分：每满 1 分钟 +0.1 分
+        DisposableEffect(progKey) {
+            val h = Handler(Looper.getMainLooper())
+            val r = object : Runnable { override fun run() { st.addPoints(1, "看资料"); h.postDelayed(this, 60000) } }
+            h.postDelayed(r, 60000)
+            onDispose { h.removeCallbacks(r) }
+        }
     }
     val s = sel
     if (s != null && st != null) LineActions(s, src, st) { sel = null }
@@ -162,6 +188,7 @@ fun DocsScreen(st: Store) {
                         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 if (Repo.hasYi(d.title)) MixText(d.title, 17.sp, 16.sp) else Text(d.title, fontSize = 16.sp)
+                                Text(st.progLabel("doc:${d.id}"), fontSize = 11.sp, color = Red)
                             }
                             Text("›", color = Color.Gray)
                         }
@@ -172,16 +199,17 @@ fun DocsScreen(st: Store) {
     } else {
         Column(Modifier.fillMaxSize()) {
             BackBar(doc.title.take(30), { open = null }) {
+                Text(st.progLabel("doc:${doc.id}"), fontSize = 12.sp, color = Red)
                 Text("拼音", fontSize = 13.sp); Switch(checked = py, onCheckedChange = { py = it }, modifier = Modifier.padding(horizontal = 6.dp))
             }
             Text("提示：长按一行可复制，或收藏其中的词、句", fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp))
-            ReaderText(doc.text, py, st, "资料·" + doc.title)
+            ReaderText(doc.text, py, st, "资料·" + doc.title, "doc:${doc.id}")
         }
     }
 }
 
 @Composable
-fun BooksScreen(st: Store) {
+fun BooksScreen(st: Store, onStart: (String, List<Q>) -> Unit) {
     var bookId by rememberSaveable { mutableStateOf<String?>(null) }
     var chap by rememberSaveable { mutableIntStateOf(-1) }
     var py by rememberSaveable { mutableStateOf(true) }
@@ -194,6 +222,7 @@ fun BooksScreen(st: Store) {
                         Column(Modifier.weight(1f)) {
                             MixText(b.title, 19.sp, 17.sp)
                             Text("${b.chapters.size} ${if (b.id == "story") "则故事" else "节/章"} · 点击查看目录", fontSize = 12.sp, color = Color.Gray)
+                            Text(st.bookProgLabel("book:" + b.id, b.chapters.size), fontSize = 11.sp, color = Red)
                         }
                         Text("›", color = Color.Gray)
                     }
@@ -201,7 +230,10 @@ fun BooksScreen(st: Store) {
             }
         }
         chap < 0 -> Column(Modifier.fillMaxSize()) {
-            BackBar("目录 · " + book.title.take(24), { bookId = null })
+            BackBar("目录 · " + book.title.take(24), { bookId = null }) {
+                Text(st.bookProgLabel("book:" + book.id, book.chapters.size), fontSize = 12.sp, color = Red)
+                Button(onClick = { onStart("复习·" + book.title, Repo.bookQs.filter { it.tag == book.id }.shuffled().take(10)) }) { Text("复习本书") }
+            }
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
                 var lastPart = "\u0000"
                 book.chapters.forEachIndexed { i, c ->
@@ -214,6 +246,7 @@ fun BooksScreen(st: Store) {
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("${i + 1}", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.width(30.dp))
                                 Box(Modifier.weight(1f)) { MixText(c.t, 17.sp, 16.sp) }
+                                Text(st.progLabel("book:${book.id}:$i"), fontSize = 11.sp, color = Red)
                             }
                         }
                     }
@@ -224,12 +257,14 @@ fun BooksScreen(st: Store) {
             val c = book.chapters[chap]
             Column(Modifier.fillMaxSize()) {
                 BackBar(c.t.take(24), { chap = -1 }) {
+                    Text(st.progLabel("book:${book.id}:$chap"), fontSize = 12.sp, color = Red)
                     Text("拼音", fontSize = 13.sp); Switch(checked = py, onCheckedChange = { py = it }, modifier = Modifier.padding(horizontal = 6.dp))
                 }
-                Box(Modifier.weight(1f)) { ReaderText(c.text, py, st, book.title + "·" + c.t) }
+                Box(Modifier.weight(1f)) { ReaderText(c.text, py, st, book.title + "·" + c.t, "book:${book.id}:$chap") }
                 Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { if (chap > 0) chap-- }, enabled = chap > 0, modifier = Modifier.weight(1f)) { Text("上一节") }
                     OutlinedButton(onClick = { chap = -1 }, modifier = Modifier.weight(1f)) { Text("目录") }
+                    OutlinedButton(onClick = { onStart("复习·" + book.title, Repo.bookQs.filter { it.tag == book.id }.shuffled().take(10)) }, modifier = Modifier.weight(1f)) { Text("复习") }
                     OutlinedButton(onClick = { if (chap < book.chapters.size - 1) chap++ }, enabled = chap < book.chapters.size - 1, modifier = Modifier.weight(1f)) { Text("下一节") }
                 }
             }
@@ -252,7 +287,7 @@ fun PapersScreen(st: Store) {
                                 Text(x.short, fontSize = 16.sp)
                                 val best = st.paperBest(x.id)
                                 Text(
-                                    (if (x.qs.isEmpty()) "仅试卷原文" else "可在线答题 ${x.qs.size} 题 / ${x.autoPts} 分") + (best?.let { " · 最高 $it 分" } ?: ""),
+                                    (if (x.qs.isEmpty()) "仅试卷原文" else "可在线答题 ${x.qs.size} 题 / ${x.autoPts} 分") + (best?.let { " · 最高 $it 分" } ?: "") + (if (x.qs.isEmpty()) "" else " · " + st.progLabel("paper:${x.id}")),
                                     fontSize = 12.sp, color = Color.Gray
                                 )
                             }
@@ -296,6 +331,8 @@ fun PaperQuiz(p: Paper, st: Store) {
     var done by remember(p.id) { mutableStateOf(false) }
     var score by remember(p.id) { mutableIntStateOf(0) }
     var confirm by remember { mutableStateOf(false) }
+    val answered = ans.count { it.isNotBlank() }
+    LaunchedEffect(answered) { if (answered > 0) st.setPct("paper:${p.id}", answered * 100 / p.qs.size.coerceAtLeast(1)) }
     if (done) {
         LazyColumn(Modifier.fillMaxSize().padding(12.dp)) {
             item {
@@ -365,6 +402,9 @@ fun PaperQuiz(p: Paper, st: Store) {
                     confirm = false
                     score = p.qs.indices.sumOf { if (Lib.grade(p.qs[it], ans[it])) p.qs[it].pts else 0 }
                     st.setPaperBest(p.id, score)
+                    st.completeProg("paper:${p.id}")
+                    var left = p.qs.indices.filter { Lib.grade(p.qs[it], ans[it]) }.sumOf { p.qs[it].pts }
+                    while (left > 0) { val c2 = minOf(10, left); st.addPoints(c2, "做对题"); left -= c2 }
                     st.addRecord("试卷", p.short, "得分 $score / ${p.autoPts}")
                     p.qs.indices.filter { !Lib.grade(p.qs[it], ans[it]) }.forEach { st.addWrong(p.qs[it].toQ(p.short)) }
                     done = true
