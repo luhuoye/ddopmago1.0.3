@@ -1,7 +1,11 @@
 package com.ddopmago
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -10,6 +14,8 @@ import java.util.Locale
 
 data class Note(val src: String, val text: String)
 data class SharedSet(val title: String, val qs: List<Q>, val ts: String)
+data class NChar(val ch: String, val color: Int, val font: Int)
+data class NoteDoc(val id: Long, val title: String, val chars: List<NChar>)
 
 class Store(ctx: Context) {
     private val sp = ctx.getSharedPreferences("yi_fav", Context.MODE_PRIVATE)
@@ -94,4 +100,83 @@ class Store(ctx: Context) {
 
     fun addSet(s: SharedSet) { sets.add(0, s); saveSets() }
     fun removeSet(s: SharedSet) { sets.remove(s); saveSets() }
+
+    // ---------- 笔记 ----------
+    val noteDocs = mutableStateListOf<NoteDoc>()
+    // ---------- 学习进度：key -> [本次进度%, 完整学习次数] ----------
+    val prog = mutableStateMapOf<String, IntArray>()
+    // ---------- 积分（单位 0.1 分）----------
+    var pointsT by mutableIntStateOf(0)
+    val pointLog = mutableStateListOf<String>()
+    val owned = mutableStateMapOf<String, Int>() // 商店物品 id -> 等级
+
+    init {
+        runCatching {
+            val a = arr("nd")
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i); val ca = o.getJSONArray("c")
+                noteDocs.add(NoteDoc(o.getLong("id"), o.getString("t"), (0 until ca.length()).map { k -> val c = ca.getJSONArray(k); NChar(c.getString(0), c.getInt(1), c.getInt(2)) }))
+            }
+        }
+        runCatching {
+            val o = JSONObject(sp.getString("prog", "{}") ?: "{}")
+            o.keys().forEach { k -> val a = o.getJSONArray(k); prog[k] = intArrayOf(a.getInt(0), a.getInt(1)) }
+        }
+        pointsT = sp.getInt("pt", 0)
+        runCatching { val a = arr("plog"); for (i in 0 until a.length()) pointLog.add(a.getString(i)) }
+        runCatching { val o = JSONObject(sp.getString("owned", "{}") ?: "{}"); o.keys().forEach { k -> owned[k] = o.getInt(k) } }
+    }
+
+    fun saveNotes() = put("nd", JSONArray(noteDocs.map { d ->
+        JSONObject().put("id", d.id).put("t", d.title).put("c", JSONArray(d.chars.map { c -> JSONArray().put(c.ch).put(c.color).put(c.font) }))
+    }))
+
+    fun upsertNote(d: NoteDoc) {
+        val i = noteDocs.indexOfFirst { it.id == d.id }
+        if (i >= 0) noteDocs[i] = d else noteDocs.add(0, d)
+        saveNotes()
+    }
+
+    fun removeNote(d: NoteDoc) { noteDocs.removeAll { it.id == d.id }; saveNotes() }
+
+    fun getProg(key: String): IntArray = prog[key] ?: intArrayOf(0, 0)
+    private fun saveProg() {
+        val o = JSONObject()
+        prog.forEach { (k, v) -> o.put(k, JSONArray().put(v[0]).put(v[1])) }
+        sp.edit().putString("prog", o.toString()).apply()
+    }
+    fun setPct(key: String, pct: Int) {
+        val c = getProg(key)
+        if (pct > c[0]) { prog[key] = intArrayOf(pct.coerceAtMost(99), c[1]); saveProg() }
+    }
+    /** 完整学习一次：次数 +1，下一轮进度从 0 开始 */
+    fun completeProg(key: String) { val c = getProg(key); prog[key] = intArrayOf(0, c[1] + 1); saveProg() }
+    /** 显示格式："50%0次" = 完整学习 0 次，本次学习进度 50% */
+    fun progLabel(key: String): String { val c = getProg(key); return "${c[0]}%${c[1]}次" }
+    fun bookProgLabel(prefix: String, n: Int): String {
+        if (n <= 0) return "0%0次"
+        val ps = (0 until n).map { getProg("$prefix:$it") }
+        return "${ps.sumOf { it[0] } / n}%${ps.minOf { it[1] }}次"
+    }
+
+    // ---------- 积分：只有三种来源——游戏里的优秀操作、做对题、看资料；每次 0.1~1 分 ----------
+    fun addPoints(tenths: Int, src: String) {
+        val t = tenths.coerceIn(1, 10)
+        pointsT += t
+        pointLog.add(0, now() + "|" + src + "|+" + (t / 10) + "." + (t % 10))
+        while (pointLog.size > 60) pointLog.removeAt(pointLog.size - 1)
+        sp.edit().putInt("pt", pointsT).putString("plog", JSONArray(pointLog.toList()).toString()).apply()
+    }
+    fun pointsText(): String = (pointsT / 10).toString() + "." + (pointsT % 10)
+    fun spend(tenths: Int): Boolean {
+        if (pointsT < tenths) return false
+        pointsT -= tenths
+        sp.edit().putInt("pt", pointsT).apply()
+        return true
+    }
+    fun setOwned(id: String, lv: Int) {
+        owned[id] = lv
+        val o = JSONObject(); owned.forEach { (k, v) -> o.put(k, v) }
+        sp.edit().putString("owned", o.toString()).apply()
+    }
 }
