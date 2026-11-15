@@ -299,6 +299,22 @@ object Mdict {
         }.start()
     }
 
+    /** 汉→彝：用 2008 词典的汉彝索引查中文词对应的彝文 */
+    fun chsLookup(q: String, limit: Int = 8): List<Sent> {
+        if (dicts.isEmpty() || q.isBlank() || !q.any { Repo.isHan(it) }) return emptyList()
+        val out = ArrayList<Sent>()
+        val re = Regex("entry://([\uA000-\uA48C]+)")
+        for (d in dicts) {
+            for (i in d.search(q, 30)) {
+                val k = d.keys[i]
+                if (!k.any { Repo.isHan(it) } || k.any { Repo.isYi(it) }) continue
+                re.findAll(d.text(i)).map { it.groupValues[1] }.distinct().take(3).forEach { y -> out.add(Sent("彝汉英词汇(2008)", y, "", k)) }
+                if (out.size >= limit) return out
+            }
+        }
+        return out
+    }
+
     fun resource(path: String): ByteArray? {
         for (m in mdds) {
             m.resource(path)?.let { return it }
